@@ -41,6 +41,30 @@ board_state={
 }
 
 
+def initialize_game():
+    global board_state, first_turn
+    first_turn = {"draw": set(), "rolls": 0, "dice_value": 0, "turn": None}
+    board_state = {
+        "players": [],
+        "current_player": None,
+        "dices_value": (0, 0),
+        "dices_remaining": [],
+        "extra_turn": False,
+        "game_state": GAME_STATES[0]
+    }
+    return {"message_type": "broadcast", "board_state": board_state}
+
+
+def reset_game():
+    return initialize_game()
+
+
+def get_last_dice():
+    global board_state
+    return {"message_type": "unicast", "dices_value": board_state["dices_value"]}
+
+
+
 
 
 
@@ -195,6 +219,7 @@ def roll_dice(player_id):
         # Si con estos dados no puede hacer NADA, pasa el turno automáticamente
         if not player_has_moves(player_id):
             board_state["dices_remaining"] = []
+            board_state["dices_value"] = (0, 0)
             next_turn()
 
     return {"message_type": "broadcast", "board_state": board_state}
@@ -248,27 +273,37 @@ def can_piece_move(player, piece_id, dice):
     goal = get_home_position(color)
 
     if pos == -1:
-        return dice == 6
+        if dice != 6:
+            return False
+        target = get_start_position(color)
+        return not detect_blockade(target)
 
     # Si ya llegó, no se mueve
     if pos == goal:
         return False
 
-    # El movimiento debe ser EXACTO
-    if pos + dice > goal:
-        return False
-
     target_pos = pos + dice
 
-    # --- CAMBIO AQUÍ: Si el destino es la meta, ignoramos bloqueos ---
-    if target_pos == goal:
-        return True
+    # El movimiento debe ser EXACTO
+    if target_pos > goal:
+        return False
 
-    # Bloqueo en casillas normales (2 piezas o más)
-    if detect_blockade(target_pos):
+    # Bloqueo en ruta o en destino
+    if is_path_blocked(pos, target_pos):
         return False
 
     return True
+
+
+def is_path_blocked(start_pos, target_pos):
+    """
+    Revisa si existe un bloqueo en alguna casilla del trayecto, incluida la casilla de destino.
+    """
+    for position in range(start_pos + 1, target_pos + 1):
+        if detect_blockade(position):
+            return True
+    return False
+
 
 def player_has_moves(player_id):
     player = next((p for p in board_state["players"] if p["id"] == player_id), None)
@@ -345,6 +380,16 @@ def move_piece(player_id, piece_id, dice_used):
     captured = check_capture(player_id, moved_to)
     if captured:
         send_piece_home(captured["player_id"], captured["piece_id"])
+
+    # Si aún quedan dados pero no hay movimientos posibles, terminar turno
+    if board_state["dices_remaining"] and not player_has_moves(player_id):
+        board_state["dices_remaining"] = []
+        if board_state["extra_turn"]:
+            board_state["extra_turn"] = False
+            board_state["dices_value"] = (0, 0)
+        else:
+            next_turn()
+            board_state["dices_value"] = (0, 0)
 
     # victoria
     if has_player_won(player_id):
